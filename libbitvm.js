@@ -1,5 +1,5 @@
 var libbitvm = {
-    network: "regtest",
+    network: "testnet",
     utxo: {},
     sigs: [],
     scripts: [],
