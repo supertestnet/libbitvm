@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <meta charset="UTF-8">
+        <script src="file:///home/supertestnet/libbitvm/tapscript.js"></script>
+        <script src="file:///home/supertestnet/libbitvm/noble-secp256k1.js"></script>
+        <script src="file:///home/supertestnet/libbitvm/sha256.js"></script>
+        <script src="file:///home/supertestnet/libbitvm/libbitvm.js"></script>
+    </head>
+    <body>
+        <script>
+            var lbv = libbitvm;
+            var $_GET = {}
+            window.location.search.replace( /\=|\?/g, "&" ).split( "&" ).slice( 1, window.location.search.replace( /\=|\?/g, "&" ).split( "&" ).length ).forEach((item,index)=>{if ( index % 2 ) $_GET[ window.location.search.replace( /\=|\?/g, "&" ).split( "&" ).slice( 1, window.location.search.replace( /\=|\?/g, "&" ).split( "&" ).length )[ index - 1 ] ] = window.location.search.replace( /\=|\?/g, "&" ).split( "&" ).slice( 1, window.location.search.replace( /\=|\?/g, "&" ).split( "&" ).length )[ index ]});
+            var proverScript = async()=>{
+                if ( $_GET[ "verifier" ] ) return;
+                alert( `You will play as the prover in this browser. Open up this document in a different browser with ?verifier=true in the url, then click ok to continue` );
+                var prover_privkey = "ab".repeat( 32 );
+                var prover_pubkey = nobleSecp256k1.getPublicKey( prover_privkey, true ).substring( 2 );
+                var verifier_privkey = "ba".repeat( 32 );
+                var verifier_pubkey = nobleSecp256k1.getPublicKey( verifier_privkey, true ).substring( 2 );
+                lbv.prover = lbv.makeActor( prover_pubkey );
+                lbv.verifier = lbv.makeActor( verifier_pubkey );
+                lbv.prover.privkey = prover_privkey;
+                lbv.verifier.privkey = verifier_privkey;
+                var scripts = [];
+                var script = [];
+                script.push( ...[ lbv.prover[ "pubkey" ], "OP_CHECKSIG", lbv.verifier[ "pubkey" ], "OP_CHECKSIGADD", 2, "OP_EQUALVERIFY" ] );
+                //The prover pushes two 1 byte strings and
+                //computes the logical "or" of those strings
+                script.push( ...lbv.functions.push_byte( lbv.prover ) );
+                script.push( ...lbv.functions.push_byte( lbv.prover ) );
+                script.push( ...lbv.functions.logical_or() );
+                script.push( "OP_1" );
+                scripts.push( script );
+                lbv.makeAddress.challenge( scripts );
+                lbv.makeAddress.response();
+                //the prover must send the verifier his pubkey and hashes.
+                //since the prover's hashes come from running makeAddress,
+                //which requires both parties to have a pubkey, the prover runs
+                //it with a "dummy pubkey" for the verifier. Later,
+                //after the prover gets the verifier's pubkey and hashes,
+                //he replaces the verifier's dummy pubkey and auto-generated
+                //hashes with the real ones, clears lbv.addresses, and reruns
+                //all lines where he called makeAddress or script.push()
+                //after the prover sends the verifier his pubkey and hashes,
+                //he should get the verifier's pubkey, hashes, and sigs,
+                //then make the contract, sign it, and give his sigs
+                var addy = tapscript.Address.p2tr.fromPubKey( lbv.prover[ "pubkey" ], lbv.network );
+                var txid = prompt( `send some sats to this address and give the txid:\n\n${addy}` );
+                var vout = Number( prompt( `and the vout` ) );
+                var amnt = Number( prompt( `and the amount` ) );
+                console.log( JSON.stringify( [lbv.prover.pubkey, [txid, vout, amnt, addy], lbv.prover.hashes] ) );
+                alert( `Send the verifier your pubkeys and hashes, they are in your console` );
+                var verifiers_key_hashes_and_sigs = JSON.parse( prompt( `Enter the verifier's pubkey and hashes and sigs` ) );
+                lbv.verifier.pubkey = verifiers_key_hashes_and_sigs[ 0 ];
+                lbv.verifier.hashes = verifiers_key_hashes_and_sigs[ 1 ];
+                var verifiers_sigs = verifiers_key_hashes_and_sigs[ 2 ];
+                lbv.addresses = [];
+                lbv.scripts = [];
+                lbv.trees = [];
+                lbv.prover.hashes_used = -1;
+                delete lbv.verifier.privkey;
+                var scripts = [];
+                var script = [];
+                script.push( ...[ lbv.prover[ "pubkey" ], "OP_CHECKSIG", lbv.verifier[ "pubkey" ], "OP_CHECKSIGADD", 2, "OP_EQUALVERIFY" ] );
+                //The prover pushes two 1 byte strings and
+                //computes the logical "or" of those strings
+                script.push( ...lbv.functions.push_byte( lbv.prover ) );
+                script.push( ...lbv.functions.push_byte( lbv.prover ) );
+                script.push( ...lbv.functions.logical_or() );
+                script.push( "OP_1" );
+                scripts.push( script );
+                lbv.makeAddress.challenge( scripts );
+                lbv.instructions.push([
+                    //the instructions help automate some parts of the
+                    //unlocking procedure for each player by informing
+                    //some code, for each transaction in the contract, who
+                    //is acting and what action(s) they must perform.
+                    //The first line of each instruction says who must act to
+                    //unlock the money in this address.
+                    //The rest of the lines say what actions they must take
+                    //in order to unlock it
+                    `prover`,
+                    `reveal_byte`,
+                    `reveal_byte`,
+                ]);
+                lbv.makeAddress.response();
+                lbv.instructions.push([
+                    `verifier`,
+                ]);
+                var txdata = tapscript.Tx.create({
+                    vin: [lbv.getVin( txid, vout, amnt, addy )],
+                    vout: [lbv.getVout( amnt - 500, lbv.addresses[ 0 ] )]
+                });
+                var sig = tapscript.Signer.taproot.sign( lbv.prover[ "privkey" ], txdata, 0 );
+                txdata.vin[ 0 ].witness = [ sig ];
+                var txhex = tapscript.Tx.encode( txdata ).hex;
+                var new_txid = tapscript.Tx.util.getTxid( txdata );
+                lbv.utxo = {
+                    txid: new_txid,
+                    vout: 0,
+                    amnt: amnt - 500,
+                    addy: lbv.addresses[ 0 ],
+                }
+                var amnt = lbv.utxo.amnt - ( 10_000 * lbv.addresses.length );
+                var outputs_to_use_on_last_tx = [lbv.getVout( amnt, "tb1qd28npep0s8frcm3y7dxqajkcy2m40eysplyr9v" )];
+                await lbv.makeContract( outputs_to_use_on_last_tx );
+                if ( verifiers_sigs.length != lbv.contract.length ) return alert( `Aborting! One of the signatures your counterparty gave you is invalid` );
+                var i; for ( i=0; i<verifiers_sigs.length; i++ ) {
+                    var index = i;
+                    var sig = verifiers_sigs[ i ];
+                    //do not send outputs_to_use_on_last_tx except on the last sig
+                    var item;
+                    if ( index === verifiers_sigs.length - 1 ) item = outputs_to_use_on_last_tx;
+                    if ( index % 2 ) var tapleaf_to_use = 0;
+                    else var tapleaf_to_use = 2;
+                    var sig_is_valid = await lbv.checkSig( sig, libbitvm.verifier.pubkey, index, tapleaf_to_use, item, true );
+                    if ( !sig_is_valid ) return alert( `Aborting! One of the signatures your counterparty gave you is invalid` );
+                    lbv.sigs[ index ].splice( 1, 0, sig );
+                }
+                var sigs = [];
+                lbv.sigs.forEach( sig => sigs.push( sig[ 0 ] ) );
+                console.log( JSON.stringify( sigs ) );
+                alert( `Send the verifier your sigs, they are in your console` );
+                console.log( `broadcast this transaction to start the contract:` );
+                console.log( txhex );
+                var i; for ( i=0; i<lbv.contract.length; i++ ) {
+                    var index = i;
+                    var item = lbv.contract[ i ];
+                    if ( index % 2 ) var tapleaf_to_use = 0;
+                    else var tapleaf_to_use = 2;
+                    var sig_1 = lbv.sigs[ index ][ 0 ];
+                    var sig_2 = lbv.sigs[ index ][ 1 ];
+                    var tx = lbv.sigs[ index ][ 2 ];
+                    var txdata = tapscript.Tx.create( tx );
+                    var scripts = lbv.scripts[ index ];
+                    var target = tapscript.Tap.encodeScript( scripts[ tapleaf_to_use ] );
+                    var [ tpubkey, cblock ] = tapscript.Tap.getPubKey( "ab".repeat( 32 ), { tree: lbv.trees[ index ], target });
+                    if ( !index ) {
+                        
+                        var preimages_to_reveal = [
+                            ...lbv.functions.reveal_byte( lbv.prover, "aa" ),
+                            ...lbv.functions.reveal_byte( lbv.prover, "05" ),
+                        ];
+                        preimages_to_reveal.reverse();
+                        txdata.vin[0].witness = [...preimages_to_reveal, sig_2, sig_1, scripts[ tapleaf_to_use ], cblock];
+                    } else {
+                        txdata.vin[0].witness = [sig_2, sig_1, scripts[ tapleaf_to_use ], cblock];
+                    }
+                    var txhex = tapscript.Tx.encode( txdata ).hex;
+                    console.log( "txhex:", txhex );
+                }
+            }
+            var verifierScript = async()=>{
+                if ( !$_GET[ "verifier" ] ) return;
+                var provers_keys_and_hashes = JSON.parse( prompt( `Enter the prover's pubkey and hashes` ) );
+                var prover_pubkey = provers_keys_and_hashes[ 0 ];
+                var verifier_privkey = "ba".repeat( 32 );
+                var verifier_pubkey = nobleSecp256k1.getPublicKey( verifier_privkey, true ).substring( 2 );
+                lbv.prover = lbv.makeActor( prover_pubkey );
+                lbv.prover.hashes = provers_keys_and_hashes[ 2 ];
+                lbv.verifier = lbv.makeActor( verifier_pubkey );
+                lbv.verifier.privkey = verifier_privkey;
+                var scripts = [];
+                var script = [];
+                script.push( ...[ lbv.prover[ "pubkey" ], "OP_CHECKSIG", lbv.verifier[ "pubkey" ], "OP_CHECKSIGADD", 2, "OP_EQUALVERIFY" ] );
+                script.push( ...lbv.functions.push_byte( lbv.prover ) );
+                script.push( ...lbv.functions.push_byte( lbv.prover ) );
+                script.push( ...lbv.functions.logical_or() );
+                script.push( "OP_1" );
+                scripts.push( script );
+                lbv.makeAddress.challenge( scripts );
+                lbv.instructions.push([
+                    `prover`,
+                    `reveal_byte`,
+                    `reveal_byte`,
+                ]);
+                lbv.makeAddress.response();
+                lbv.instructions.push([
+                    `verifier`,
+                ]);
+                var txdata = tapscript.Tx.create({
+                    vin: [{
+                        txid: provers_keys_and_hashes[ 1 ][ 0 ],
+                        vout: provers_keys_and_hashes[ 1 ][ 1 ],
+                        prevout: {
+                            value: provers_keys_and_hashes[ 1 ][ 2 ],
+                            scriptPubKey: tapscript.Address.toScriptPubKey( provers_keys_and_hashes[ 1 ][ 3 ] )
+                        },
+                    }],
+                    vout: [{
+                        value: provers_keys_and_hashes[ 1 ][ 2 ] - 500,
+                        scriptPubKey: tapscript.Address.toScriptPubKey( lbv.addresses[ 0 ] )
+                    }]
+                });
+                var new_txid = tapscript.Tx.util.getTxid( txdata );
+                lbv.utxo = {
+                    txid: new_txid,
+                    vout: 0,
+                    amnt: provers_keys_and_hashes[ 1 ][ 2 ] - 500,
+                    addy: lbv.addresses[ 0 ],
+                }
+                var amnt = lbv.utxo.amnt - ( 10_000 * lbv.addresses.length );
+                var outputs_to_use_on_last_tx = [lbv.getVout( amnt, "tb1qd28npep0s8frcm3y7dxqajkcy2m40eysplyr9v" )];
+                await lbv.makeContract( outputs_to_use_on_last_tx, true );
+                var sigs = [];
+                lbv.sigs.forEach( sig => sigs.push( sig[ 0 ] ) );
+                console.log( JSON.stringify( [lbv.verifier.pubkey, lbv.verifier.hashes, sigs] ) );
+                alert( `Send the prover your pubkeys, hashes, and sigs, they are in your console` );
+                var provers_sigs = JSON.parse( prompt( `enter the prover's sigs` ) );
+                if ( provers_sigs.length != lbv.contract.length ) return alert( `Aborting! One of the signatures your counterparty gave you is invalid` );
+                var i; for ( i=0; i<provers_sigs.length; i++ ) {
+                    var index = i;
+                    var sig = provers_sigs[ i ];
+                    //do not send outputs_to_use_on_last_tx except on the last sig
+                    var item;
+                    if ( index === provers_sigs.length - 1 ) item = outputs_to_use_on_last_tx;
+                    if ( index % 2 ) var tapleaf_to_use = 0;
+                    else var tapleaf_to_use = 2;
+                    var sig_is_valid = await lbv.checkSig( sig, libbitvm.prover.pubkey, index, tapleaf_to_use, item, true );
+                    if ( !sig_is_valid ) return alert( `Aborting! One of the signatures your counterparty gave you is invalid` );
+                    lbv.sigs[ index ].splice( 0, 0, sig );
+                }
+            }
+            window.onload = () => {setTimeout(()=>{proverScript();verifierScript();})}
+        </script>
+    </body>
+</html>
